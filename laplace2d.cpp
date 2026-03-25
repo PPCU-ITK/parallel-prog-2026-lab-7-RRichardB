@@ -56,10 +56,16 @@ int main(int argc, const char** argv)
   for (int j = 1; j < jmax+2; j++)
     Anew[(j)*(imax+2)+jmax+1] = sin(pi * j / (jmax+1))*expf(-pi);
   auto t1 = std::chrono::high_resolution_clock::now();
+
+  // No need for this, if we compile with '-gpu=cc80,managed'
+  // #pragma omp target data \
+          map(A[0:(imax+2)*(jmax+2)]) \
+          map(Anew[0:(imax+2)*(jmax+2)])
   while ( error > tol && iter < iter_max )
   {
     error = 0.0;
-#pragma omp parallel for reduction(max:error)
+    #pragma omp target teams distribute parallel for reduction(max:error) collapse(2) \
+            map(A[0:(imax+2)*(jmax+2)]) map(Anew[0:(imax+2)*(jmax+2)])
     for( int j = 1; j < jmax+1; j++ )
     {
       for( int i = 1; i < imax+1; i++)
@@ -69,7 +75,8 @@ int main(int argc, const char** argv)
         error = fmax( error, fabs(Anew[(j)*(imax+2)+i]-A[(j)*(imax+2)+i]));
       }
     }
-#pragma omp parallel for
+    #pragma omp target teams distribute parallel for collapse(2) \
+            map(A[0:(imax+2)*(jmax+2)]) map(Anew[0:(imax+2)*(jmax+2)])
     for( int j = 1; j < jmax+1; j++ )
     {
       for( int i = 1; i < imax+1; i++)
