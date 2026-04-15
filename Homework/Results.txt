@@ -1,10 +1,11 @@
-Simulation times (ms) at default, 4x, 8x and 16x problem sizes (Nx, Ny) compared between CPU and GPU.
+Simulation times (ms) at default, 4x, 8x and 16x problem
+sizes(Nx, Ny) compared between (parallelized) CPU and GPU.
 
         CPU         GPU         speedup
-Def     715         564         1.26x
-4x      11374       620         18.35x
-8x      48593       941         51.64x
-16x     201271      2093        96.16x
+Def     500         564         0.89x
+4x      8123        620         13.1x
+8x      35381       941         37.6x
+16x     147783      2093        70.6x
 
 We can see strong speedup when using GPUs for the task compared to CPUs.
 This speedup also becomes much more significant when we increase the problem size, as expected.

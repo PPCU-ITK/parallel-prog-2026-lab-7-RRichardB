@@ -7,6 +7,7 @@
 #include <sstream>
 #include <chrono>
 
+
 using namespace std;
 
 // ------------------------------------------------------------
@@ -56,8 +57,8 @@ void fluxY(double rho, double rhou, double rhov, double E,
 // ------------------------------------------------------------
 int main(){
     // ----- Grid and domain parameters -----
-    const int Nx = 100;         // Number of cells in x (excluding ghost cells)
-    const int Ny = 200;         // Number of cells in y
+    const int Nx = 3200;         // Number of cells in x (excluding ghost cells)
+    const int Ny = 1600;         // Number of cells in y
     const double Lx = 2.0;      // Domain length in x
     const double Ly = 1.0;      // Domain length in y
     const double dx = Lx / Nx;
@@ -66,30 +67,18 @@ int main(){
     // Create flat arrays (with ghost cells)
     const int total_size = (Nx + 2) * (Ny + 2);
     
-    double* rho = (double*)malloc(total_size * sizeof(double));
-    double* rhou = (double*)malloc(total_size * sizeof(double));
-    double* rhov = (double*)malloc(total_size * sizeof(double));
-    double* E = (double*)malloc(total_size * sizeof(double));
-    double* rho_new = (double*)malloc(total_size * sizeof(double));
-    double* rhou_new = (double*)malloc(total_size * sizeof(double));
-    double* rhov_new = (double*)malloc(total_size * sizeof(double));
-    double* E_new = (double*)malloc(total_size * sizeof(double));
-
-    // Boolean mask for solid cells
-    bool* solid = (bool*)malloc(total_size * sizeof(bool));
-
-    // Remember to initialize if needed
-    for (int i = 0; i < total_size; i++) {
-      rho[i] = 0.0;
-      rhou[i] = 0.0;
-      rhov[i] = 0.0;
-      E[i] = 0.0;
-      rho_new[i] = 0.0;
-      rhou_new[i] = 0.0;
-      rhov_new[i] = 0.0;
-      E_new[i] = 0.0;
-      solid[i] = false;
-    }
+    vector<double> rho(total_size);
+    vector<double> rhou(total_size);
+    vector<double> rhov(total_size);
+    vector<double> E(total_size);
+    
+    vector<double> rho_new(total_size);
+    vector<double> rhou_new(total_size);
+    vector<double> rhov_new(total_size);
+    vector<double> E_new(total_size);
+    
+    // A mask to mark solid cells (inside the cylinder)
+    vector<bool> solid(total_size, false);
 
     // ----- Obstacle (cylinder) parameters -----
     const double cx = 0.5;      // Cylinder center x
@@ -134,13 +123,30 @@ int main(){
     // ----- Time stepping parameters -----
     const int nSteps = 2000;
 
-    // Time the main loop (start)
-    auto main_timer_start = std::chrono::high_resolution_clock::now();
+    // Timers and counters
+    double boundaries_dur = 0.0;
+    int boundaries_count  = 0;
+
+    double interior_dur = 0.0;
+    int interior_count  = 0;
+
+    double copy_dur = 0.0;
+    int copy_count  = 0;
+    
+    double energy_dur = 0.0;
+    int energy_count  = 0;
 
     // ----- Main time-stepping loop -----
+
+    // Time the main loop (start)
+    auto main_timer_start = std::chrono::high_resolution_clock::now();
     for (int n = 0; n < nSteps; n++){
+
         // --- Apply boundary conditions on ghost cells ---
+        auto boundary_start = std::chrono::high_resolution_clock::now();
+        
         // Left boundary (inflow): fixed free-stream state
+        #pragma omp parallel for
         for (int j = 0; j < Ny+2; j++){
             rho[0*(Ny+2)+j] = rho0;
             rhou[0*(Ny+2)+j] = rho0*u0;
@@ -148,6 +154,7 @@ int main(){
             E[0*(Ny+2)+j] = E0;
         }
         // Right boundary (outflow): copy from the interior
+        #pragma omp parallel for
         for (int j = 0; j < Ny+2; j++){
             rho[(Nx+1)*(Ny+2)+j] = rho[Nx*(Ny+2)+j];
             rhou[(Nx+1)*(Ny+2)+j] = rhou[Nx*(Ny+2)+j];
@@ -155,6 +162,7 @@ int main(){
             E[(Nx+1)*(Ny+2)+j] = E[Nx*(Ny+2)+j];
         }
         // Bottom boundary: reflective
+        #pragma omp parallel for
         for (int i = 0; i < Nx+2; i++){
             rho[i*(Ny+2)+0] = rho[i*(Ny+2)+1];
             rhou[i*(Ny+2)+0] = rhou[i*(Ny+2)+1];
@@ -162,14 +170,21 @@ int main(){
             E[i*(Ny+2)+0] = E[i*(Ny+2)+1];
         }
         // Top boundary: reflective
+        #pragma omp parallel for
         for (int i = 0; i < Nx+2; i++){
             rho[i*(Ny+2)+(Ny+1)] = rho[i*(Ny+2)+Ny];
             rhou[i*(Ny+2)+(Ny+1)] = rhou[i*(Ny+2)+Ny];
             rhov[i*(Ny+2)+(Ny+1)] = -rhov[i*(Ny+2)+Ny];
             E[i*(Ny+2)+(Ny+1)] = E[i*(Ny+2)+Ny];
         }
+        
+        auto boundary_end = std::chrono::high_resolution_clock::now();
+        boundaries_dur += std::chrono::duration_cast<std::chrono::duration<double>>(boundary_end - boundary_start).count();
+        boundaries_count++;
 
         // --- Update interior cells using a Lax-Friedrichs scheme ---
+        auto interior_start = std::chrono::high_resolution_clock::now();
+        #pragma omp parallel for collapse(2) schedule(static)
         for (int i = 1; i <= Nx; i++){
             for (int j = 1; j <= Ny; j++){
                 // If the cell is inside the solid obstacle, do not update it
@@ -216,8 +231,13 @@ int main(){
                 E_new[i*(Ny+2)+j] -= dtdx * (fx_E1 - fx_E2) + dtdy * (fy_E1 - fy_E2);
             }
         }
+        auto interior_end = std::chrono::high_resolution_clock::now();
+        interior_dur += std::chrono::duration_cast<std::chrono::duration<double>>(interior_end - interior_start).count();
+        interior_count++;
 
         // Copy updated values back
+        auto copy_start = std::chrono::high_resolution_clock::now();
+        #pragma omp parallel for
         for (int i = 1; i <= Nx; i++){
             for (int j = 1; j <= Ny; j++){
                 rho[i*(Ny+2)+j] = rho_new[i*(Ny+2)+j];
@@ -226,9 +246,15 @@ int main(){
                 E[i*(Ny+2)+j] = E_new[i*(Ny+2)+j];
             }
         }
+        auto copy_end = std::chrono::high_resolution_clock::now();
+        copy_dur += std::chrono::duration_cast<std::chrono::duration<double>>(copy_end - copy_start).count();
+        copy_count++;
 
         // Calculate total kinetic energy
+
+        auto energy_start = std::chrono::high_resolution_clock::now();
         double total_kinetic = 0.0;
+        #pragma omp parallel for reduction(+:total_kinetic)
         for (int i = 1; i <= Nx; i++) {
             for (int j = 1; j <= Ny; j++) {
                 double u = rhou[i*(Ny+2)+j] / rho[i*(Ny+2)+j];
@@ -236,18 +262,18 @@ int main(){
                 total_kinetic += 0.5 * rho[i*(Ny+2)+j] * (u * u + v * v);
             }
         }
+        auto energy_end = std::chrono::high_resolution_clock::now();
+        energy_dur += std::chrono::duration_cast<std::chrono::duration<double>>(energy_end - energy_start).count();
+        energy_count++;
 
-        // Optional: output progress and write VTK file every 50 time steps
         if (n % 50 == 0) {
             cout << "Step " << n << " completed, total kinetic energy: " << total_kinetic << endl;
         }
     }
 
-    // Time the main loop (end)
     auto main_timer_end = std::chrono::high_resolution_clock::now();
-    auto main_duration = std::chrono::duration_cast<std::chrono::milliseconds>(main_timer_end - main_timer_start).count();
-    cout << "Main loop execution time: " << main_duration << " ms" << endl;
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(main_timer_end - main_timer_start).count();
+    cout << "Total simulation time: " << duration << " ms" << endl;
 
     return 0;
 }
-
